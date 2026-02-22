@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { motion } from "framer-motion";
+import { supabase } from "../lib/supabase";
 
 // ======================================================
 // CONFIG
@@ -23,26 +24,6 @@ function Logo(){
     </div>
   );
 }
-
-// ======================================================
-// FIREBASE
-// ======================================================
-import { initializeApp } from "firebase/app";
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "firebase/auth";
-import { getFirestore, collection, addDoc, getDocs } from "firebase/firestore";
-
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MSG_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
 
 // ======================================================
 // MAIN APP
@@ -77,26 +58,29 @@ export default function AnimeStreamingSite(){
   // ======================================================
   // AUTH LISTENER
   // ======================================================
-  useEffect(()=>{
-    const unsub = onAuthStateChanged(auth,u=>{
-      setUser(u);
-      setLoading(false);
-      if(u) loadAnime();
-    });
-    return ()=>unsub();
-  },[]);
+ useEffect(()=>{
+  supabase.auth.getUser().then(res=>{
+    setUser(res.data.user);
+    setLoading(false);
+    if(res.data.user) loadAnime();
+  });
 
+  const { data: listener } = supabase.auth.onAuthStateChange((_e,session)=>{
+    setUser(session?.user ?? null);
+  });
+
+  return ()=>listener.subscription.unsubscribe();
+},[]);
 
   // ======================================================
   // LOAD ANIME
   // ======================================================
   async function loadAnime(){
-    const snap = await getDocs(collection(db,"anime"));
-    const list = snap.docs.map(d=>d.data());
-    setAnime(list);
-    setFiltered(list);
-  }
-
+  const { data,error } = await supabase.from("anime").select("*");
+  if(error) return alert(error.message);
+  setAnime(data);
+  setFiltered(data);
+}
 
   // ======================================================
   // SEARCH FILTER
@@ -111,40 +95,49 @@ export default function AnimeStreamingSite(){
   // ======================================================
   // LOGIN / SIGNUP
   // ======================================================
-  async function handleAuth(){
-    try{
-      if(isLogin)
-        await signInWithEmailAndPassword(auth,email,password);
-      else
-        await createUserWithEmailAndPassword(auth,email,password);
-    }catch(e){ alert(e.message); }
+ async function handleAuth(){
+  if(isLogin){
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+    if(error) alert(error.message);
+  }else{
+    const { error } = await supabase.auth.signUp({
+      email,
+      password
+    });
+    if(error) alert(error.message);
   }
-
+}
 
   // ======================================================
   // ADD ANIME (OWNER ONLY)
   // ======================================================
   async function addAnime(){
-    if(user.email!==OWNER_EMAIL) return alert("Owner only");
+  if(user.email !== import.meta.env.VITE_OWNER_EMAIL)
+    return alert("Owner only");
 
-    let parsed;
-    try{ parsed = JSON.parse(episodesJSON); }
-    catch{ return alert("Invalid JSON format"); }
+  let parsed;
+  try{ parsed = JSON.parse(episodesJSON); }
+  catch{ return alert("Invalid JSON"); }
 
-    await addDoc(collection(db,"anime"),{
-      title,
-      genre:genreInput,
-      thumbnail,
-      seasons:parsed
-    });
+  const { error } = await supabase.from("anime").insert({
+    title,
+    genre:genreInput,
+    thumbnail,
+    seasons:parsed
+  });
 
-    setTitle("");
-    setGenreInput("");
-    setThumbnail("");
-    setEpisodesJSON("");
-    loadAnime();
-  }
+  if(error) return alert(error.message);
 
+  loadAnime();
+}
+
+async function logout(){
+  await supabase.auth.signOut();
+  setUser(null);
+}
 
   // ======================================================
   // PLAY EPISODE
@@ -207,7 +200,7 @@ export default function AnimeStreamingSite(){
         <Logo/>
         <div className="flex gap-3">
           <Button onClick={()=>setPremium(true)}>Go Premium</Button>
-          <Button variant="outline" onClick={()=>signOut(auth)}>Logout</Button>
+          <Button variant="outline" onClick={logout}>Logout</Button>
         </div>
       </div>
 
